@@ -1,46 +1,24 @@
-name: Build Docker Image and Trigger Docs/Website
+name: Build Personal Docker Image
 
 on:
-  # push:
-  #   tags:
-  #     - "[0-9]+.[0-9]+.[0-9]+*"
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Docker tag to use (e.g., test, v1.0, feature-name)'
+        required: true
+        default: 'test'
 
 permissions:
-  id-token: write
-  contents: write
+  contents: read
   packages: write
-  actions: write
 
 jobs:
-  validate-tag-semver:
-    runs-on: ubuntu-latest
-    outputs:
-      valid: ${{ steps.check_tag.outputs.valid }}
-    steps:
-      - name: Check if tag follows SemVer
-        id: check_tag
-        run: |
-          TAG="${{ github.event.release.tag_name }}"
-          if [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-alpha\.[0-9]+|-beta\.[0-9]+|-rc\.[0-9]+)?$ ]]; then
-            echo "valid=true" >> $GITHUB_OUTPUT
-          else
-            echo "valid=false" >> $GITHUB_OUTPUT
-          fi
-
   build:
-    needs: validate-tag-semver
     runs-on: ubuntu-latest
-    if: needs.validate-tag-semver.outputs.valid == 'true'
     permissions:
-      id-token: write
-      contents: write
+      contents: read
       packages: write
     steps:
-      - name: Run only once per release
-        run: echo "Triggered by ${{ github.event_name }}"
-
       - name: Checkout code
         uses: actions/checkout@v4.3.0
 
@@ -49,12 +27,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3.11.1
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3.5.0
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3.5.0
@@ -68,19 +40,14 @@ jobs:
         uses: docker/metadata-action@v5.8.0
         with:
           images: |
-            name=rommapp/romm
-            name=ghcr.io/rommapp/romm
+            name=ghcr.io/vargash/romm
           flavor: |
-            latest=auto
             suffix=-slim,onlatest=true
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=raw,value=${{ github.event.inputs.tag }}
           labels: |
-            org.opencontainers.image.version={{version}}-slim
-            org.opencontainers.image.title="rommapp/romm"
-            org.opencontainers.image.description="RomM (ROM Manager) allows you to scan, enrich, and browse your game collection with a clean and responsive interface. With support for multiple platforms, various naming schemes and custom tags, RomM is a must-have for anyone who plays on emulators."
+            org.opencontainers.image.title="vargash/romm"
+            org.opencontainers.image.description="Personal build of RomM (ROM Manager)"
             org.opencontainers.image.licenses="AGPLv3"
 
       - name: Generate Docker metadata (full)
@@ -88,21 +55,17 @@ jobs:
         uses: docker/metadata-action@v5.8.0
         with:
           images: |
-            name=rommapp/romm
-            name=ghcr.io/rommapp/romm
+            name=ghcr.io/vargash/romm
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=raw,value=${{ github.event.inputs.tag }}
           labels: |
-            org.opencontainers.image.version={{version}}
-            org.opencontainers.image.title="rommapp/romm"
-            org.opencontainers.image.description="RomM (ROM Manager) allows you to scan, enrich, and browse your game collection with a clean and responsive interface. With support for multiple platforms, various naming schemes and custom tags, RomM is a must-have for anyone who plays on emulators."
+            org.opencontainers.image.title="vargash/romm"
+            org.opencontainers.image.description="Personal build of RomM (ROM Manager)"
             org.opencontainers.image.licenses="AGPLv3"
 
       - name: Set version
         run: |
-          sed -i 's/<version>/${{ steps.meta.outputs.version }}/' backend/__version__.py
+          sed -i 's/<version>/${{ github.event.inputs.tag }}/' backend/__version__.py
 
       - name: Build slim image
         id: build-slim
@@ -127,30 +90,3 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           target: full-image
-
-  trigger-docs-and-web:
-    permissions:
-      actions: write
-    needs: build
-    runs-on: ubuntu-latest
-    if: needs.build.result == 'success' && github.event.release.prerelease == false
-    steps:
-      - name: Trigger docs build
-        run: |
-          curl -L -X POST \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: Bearer ${DOCS_PAT}" \
-            "https://api.github.com/repos/rommapp/docs/actions/workflows/deploy.yml/dispatches" \
-            -d '{"ref":"main", "inputs": {"version": "${{ github.event.release.tag_name }}"}}'
-        env:
-          DOCS_PAT: ${{ secrets.DOCS_PAT }}
-
-      - name: Trigger website build
-        run: |
-          curl -L -X POST \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: Bearer ${DOCS_PAT}" \
-            "https://api.github.com/repos/rommapp/marketing-site/actions/workflows/deploy.yml/dispatches" \
-            -d '{"ref":"main", "inputs": {"version": "${{ github.event.release.tag_name }}"}}'
-        env:
-          DOCS_PAT: ${{ secrets.DOCS_PAT }}
